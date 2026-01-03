@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPAM - IP Address Management</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🌐 IPAM - IP Address Management</h1>
+            <p class="subtitle">서브넷 및 IP 주소 관리 시스템</p>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-button active" onclick="showTab('subnets')">서브넷 목록</button>
+            <button class="tab-button" onclick="showTab('add-subnet')">서브넷 추가</button>
+            <button class="tab-button" onclick="showTab('stats')">통계</button>
+        </nav>
+
+        <!-- 서브넷 목록 탭 -->
+        <div id="subnets-tab" class="tab-content active">
+            <div class="section-header">
+                <h2>서브넷 목록</h2>
+                <button class="btn btn-primary" onclick="loadSubnets()">새로고침</button>
+            </div>
+            <div class="filter-bar">
+                <label>
+                    <input type="checkbox" id="filter-active" checked onchange="loadSubnets()">
+                    활성 서브넷만 표시
+                </label>
+            </div>
+            <div id="subnets-list" class="subnets-grid">
+                <div class="loading">로딩 중...</div>
+            </div>
+        </div>
+
+        <!-- 서브넷 추가 탭 -->
+        <div id="add-subnet-tab" class="tab-content">
+            <div class="section-header">
+                <h2>새 서브넷 추가</h2>
+            </div>
+            <form id="add-subnet-form" class="form">
+                <div class="form-group">
+                    <label for="subnet-name">서브넷 이름 *</label>
+                    <input type="text" id="subnet-name" required placeholder="예: 본사 서버망">
+                </div>
+                <div class="form-group">
+                    <label for="subnet-network">네트워크 (CIDR) *</label>
+                    <input type="text" id="subnet-network" required placeholder="예: 192.168.1.0/24">
+                    <small>CIDR 형식으로 입력하세요 (예: 192.168.1.0/24)</small>
+                </div>
+                <div class="form-group">
+                    <label for="subnet-description">설명</label>
+                    <textarea id="subnet-description" rows="3" placeholder="서브넷에 대한 설명을 입력하세요"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="subnet-vlan">VLAN ID</label>
+                        <input type="number" id="subnet-vlan" placeholder="예: 100">
+                    </div>
+                    <div class="form-group">
+                        <label for="subnet-location">위치</label>
+                        <input type="text" id="subnet-location" placeholder="예: 본사 3층">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="subnet-active" checked>
+                        활성 상태
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">서브넷 추가</button>
+                    <button type="reset" class="btn btn-secondary">초기화</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- 통계 탭 -->
+        <div id="stats-tab" class="tab-content">
+            <div class="section-header">
+                <h2>통계 정보</h2>
+                <button class="btn btn-primary" onclick="loadStats()">새로고침</button>
+            </div>
+            <div id="stats-content" class="stats-grid">
+                <div class="loading">로딩 중...</div>
+            </div>
+        </div>
+
+        <!-- 메시지 알림 -->
+        <div id="message" class="message"></div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+
+        // 탭 전환
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            event.target.classList.add('active');
+
+            if (tabName === 'subnets') {
+                loadSubnets();
+            } else if (tabName === 'stats') {
+                loadStats();
+            }
+        }
+
+        // 서브넷 목록 로드
+        async function loadSubnets() {
+            const listEl = document.getElementById('subnets-list');
+            const filterActive = document.getElementById('filter-active').checked;
+            
+            listEl.innerHTML = '<div class="loading">로딩 중...</div>';
+            
+            try {
+                const url = filterActive 
+                    ? `${API_BASE}/subnets?is_active=true`
+                    : `${API_BASE}/subnets`;
+                const response = await fetch(url);
+                const subnets = await response.json();
+                
+                if (subnets.length === 0) {
+                    listEl.innerHTML = '<div class="empty">등록된 서브넷이 없습니다.</div>';
+                    return;
+                }
+                
+                listEl.innerHTML = subnets.map(subnet => `
+                    <div class="subnet-card">
+                        <div class="subnet-header">
+                            <h3>${subnet.name}</h3>
+                            <span class="badge ${subnet.is_active ? 'badge-success' : 'badge-inactive'}">
+                                ${subnet.is_active ? '활성' : '비활성'}
+                            </span>
+                        </div>
+                        <div class="subnet-body">
+                            <div class="info-row">
+                                <strong>네트워크:</strong>
+                                <code>${subnet.network}</code>
+                            </div>
+                            ${subnet.network_info ? `
+                                <div class="info-row">
+                                    <strong>사용 가능한 호스트:</strong>
+                                    <span>${subnet.network_info.usable_hosts}개</span>
+                                </div>
+                                <div class="info-row">
+                                    <strong>서브넷 마스크:</strong>
+                                    <code>${subnet.network_info.netmask}</code>
+                                </div>
+                            ` : ''}
+                            ${subnet.vlan_id ? `
+                                <div class="info-row">
+                                    <strong>VLAN ID:</strong>
+                                    <span>${subnet.vlan_id}</span>
+                                </div>
+                            ` : ''}
+                            ${subnet.location ? `
+                                <div class="info-row">
+                                    <strong>위치:</strong>
+                                    <span>${subnet.location}</span>
+                                </div>
+                            ` : ''}
+                            ${subnet.description ? `
+                                <div class="info-row">
+                                    <strong>설명:</strong>
+                                    <span>${subnet.description}</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                        <div class="subnet-actions">
+                            <button class="btn btn-sm btn-info" onclick="viewSubnetStats(${subnet.id})">통계 보기</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteSubnet(${subnet.id}, '${subnet.name}')">삭제</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                listEl.innerHTML = `<div class="error">오류 발생: ${error.message}</div>`;
+            }
+        }
+
+        // 서브넷 추가 폼 제출
+        document.getElementById('add-subnet-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const data = {
+                name: document.getElementById('subnet-name').value,
+                network: document.getElementById('subnet-network').value,
+                description: document.getElementById('subnet-description').value || null,
+                vlan_id: document.getElementById('subnet-vlan').value ? parseInt(document.getElementById('subnet-vlan').value) : null,
+                location: document.getElementById('subnet-location').value || null,
+                is_active: document.getElementById('subnet-active').checked
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE}/subnets`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                if (response.ok) {
+                    showMessage('서브넷이 성공적으로 추가되었습니다.', 'success');
+                    e.target.reset();
+                    showTab('subnets');
+                    loadSubnets();
+                } else {
+                    const error = await response.json();
+                    showMessage(`오류: ${error.detail}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`오류 발생: ${error.message}`, 'error');
+            }
+        });
+
+        // 서브넷 삭제
+        async function deleteSubnet(id, name) {
+            if (!confirm(`서브넷 "${name}"을(를) 삭제하시겠습니까?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/subnets/${id}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    showMessage('서브넷이 삭제되었습니다.', 'success');
+                    loadSubnets();
+                } else {
+                    const error = await response.json();
+                    showMessage(`오류: ${error.detail}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`오류 발생: ${error.message}`, 'error');
+            }
+        }
+
+        // 서브넷 통계 보기
+        async function viewSubnetStats(id) {
+            try {
+                const response = await fetch(`${API_BASE}/subnets/${id}/stats`);
+                const stats = await response.json();
+                
+                alert(`서브넷 통계\n\n` +
+                      `네트워크: ${stats.network}\n` +
+                      `전체 호스트: ${stats.network_info.usable_hosts}개\n` +
+                      `할당된 IP: ${stats.allocated_ips}개\n` +
+                      `사용 가능한 IP: ${stats.available_ips}개\n` +
+                      `사용률: ${stats.utilization_percent}%`);
+            } catch (error) {
+                showMessage(`오류 발생: ${error.message}`, 'error');
+            }
+        }
+
+        // 통계 로드
+        async function loadStats() {
+            const statsEl = document.getElementById('stats-content');
+            statsEl.innerHTML = '<div class="loading">로딩 중...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/subnets`);
+                const subnets = await response.json();
+                
+                let totalSubnets = subnets.length;
+                let activeSubnets = subnets.filter(s => s.is_active).length;
+                let totalHosts = 0;
+                
+                subnets.forEach(subnet => {
+                    if (subnet.network_info) {
+                        totalHosts += subnet.network_info.usable_hosts;
+                    }
+                });
+                
+                statsEl.innerHTML = `
+                    <div class="stat-card">
+                        <h3>전체 서브넷</h3>
+                        <div class="stat-value">${totalSubnets}</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>활성 서브넷</h3>
+                        <div class="stat-value">${activeSubnets}</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>전체 사용 가능한 호스트</h3>
+                        <div class="stat-value">${totalHosts.toLocaleString()}</div>
+                    </div>
+                `;
+            } catch (error) {
+                statsEl.innerHTML = `<div class="error">오류 발생: ${error.message}</div>`;
+            }
+        }
+
+        // 메시지 표시
+        function showMessage(text, type = 'info') {
+            const messageEl = document.getElementById('message');
+            messageEl.textContent = text;
+            messageEl.className = `message message-${type}`;
+            messageEl.style.display = 'block';
+            
+            setTimeout(() => {
+                messageEl.style.display = 'none';
+            }, 3000);
+        }
+
+        // 페이지 로드 시 서브넷 목록 자동 로드
+        window.addEventListener('DOMContentLoaded', () => {
+            loadSubnets();
+        });
+    </script>
+</body>
+</html>
+
+
