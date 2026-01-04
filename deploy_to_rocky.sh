@@ -180,8 +180,35 @@ fi
 
 # 8. 데이터베이스 초기화
 echo "[8/10] 데이터베이스 초기화 중..."
+
+# PostgreSQL 연결 확인
+echo "  - PostgreSQL 연결 확인 중..."
+if sudo -u postgres psql -c "SELECT 1;" > /dev/null 2>&1; then
+    echo "  PostgreSQL 서비스가 정상적으로 실행 중입니다"
+else
+    echo "  ⚠️  경고: PostgreSQL 서비스에 연결할 수 없습니다"
+    echo "  PostgreSQL 서비스 상태를 확인하세요: systemctl status postgresql"
+fi
+
+# 데이터베이스 및 사용자 연결 테스트
+echo "  - 데이터베이스 연결 테스트 중..."
+if sudo -u ipam psql -h localhost -U ipam -d ipam -c "SELECT 1;" > /dev/null 2>&1; then
+    echo "  데이터베이스 연결 성공"
+else
+    echo "  ⚠️  경고: ipam 사용자로 데이터베이스 연결 실패"
+    echo "  pg_hba.conf 설정을 확인하세요"
+    echo "  수동 테스트: sudo -u ipam psql -h localhost -U ipam -d ipam"
+fi
+
 # PYTHONPATH를 설정하여 app 모듈을 찾을 수 있도록 함
-sudo -u "$SERVICE_USER" env PYTHONPATH="$IPAM_DIR" "$IPAM_DIR/venv/bin/python" -m app.init_db
+echo "  - 데이터베이스 테이블 생성 중..."
+if sudo -u "$SERVICE_USER" env PYTHONPATH="$IPAM_DIR" "$IPAM_DIR/venv/bin/python" -m app.init_db; then
+    echo "  데이터베이스 초기화 완료"
+else
+    echo "  ❌ 오류: 데이터베이스 초기화 실패"
+    echo "  로그를 확인하세요: journalctl -u $SERVICE_NAME -n 50"
+    exit 1
+fi
 
 # 9. systemd 서비스 파일 생성
 echo "[9/10] systemd 서비스 파일 생성 중..."
