@@ -23,11 +23,39 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # 1. 필요한 패키지 설치
-echo "[1/9] 시스템 패키지 설치 중..."
+echo "[1/10] 시스템 패키지 설치 중..."
 dnf update -y
-dnf install -y python3 python3-pip python3-devel gcc postgresql-devel mysql-devel sqlite-devel
+# PostgreSQL을 기본값으로 사용하므로 postgresql-server와 postgresql-devel 설치
+dnf install -y python3 python3-pip python3-devel gcc postgresql postgresql-server postgresql-devel
 
-# 2. 서비스 사용자 생성
+# 2. PostgreSQL 초기화 및 시작
+echo "[2/10] PostgreSQL 설정 중..."
+if [ ! -d /var/lib/pgsql/data ]; then
+    postgresql-setup --initdb
+    echo "PostgreSQL 데이터베이스 초기화 완료"
+else
+    echo "PostgreSQL 데이터베이스가 이미 초기화되어 있습니다"
+fi
+
+# PostgreSQL 서비스 시작 및 활성화
+systemctl enable postgresql
+systemctl start postgresql
+
+# PostgreSQL 사용자 및 데이터베이스 생성
+echo "  - PostgreSQL 사용자 및 데이터베이스 생성 중..."
+# 사용자 생성 (이미 존재하면 에러 무시)
+sudo -u postgres psql -c "CREATE USER ipam WITH PASSWORD 'ipam';" 2>/dev/null || echo "  사용자 ipam이 이미 존재합니다"
+
+# 데이터베이스 생성 (이미 존재하면 에러 무시)
+sudo -u postgres psql -c "CREATE DATABASE ipam OWNER ipam;" 2>/dev/null || echo "  데이터베이스 ipam이 이미 존재합니다"
+
+# 권한 부여
+sudo -u postgres psql -d ipam -c "GRANT ALL PRIVILEGES ON DATABASE ipam TO ipam;" 2>/dev/null
+
+echo "  PostgreSQL 설정 완료 (사용자: ipam, 비밀번호: ipam, 데이터베이스: ipam)"
+echo "  ⚠️  보안을 위해 프로덕션 환경에서는 비밀번호를 변경하세요!"
+
+# 3. 서비스 사용자 생성
 echo "[2/9] 서비스 사용자 생성 중..."
 if ! id "$SERVICE_USER" &>/dev/null; then
     useradd -r -s /bin/false -d "$IPAM_DIR" "$SERVICE_USER"
@@ -36,12 +64,12 @@ else
     echo "사용자 $SERVICE_USER 이미 존재합니다"
 fi
 
-# 3. 디렉토리 구조 생성
-echo "[3/9] 디렉토리 구조 생성 중..."
+# 4. 디렉토리 구조 생성
+echo "[4/10] 디렉토리 구조 생성 중..."
 mkdir -p "$IPAM_DIR"/{app/{api,web,templates,static,models},venv,logs}
 
-# 4. 애플리케이션 파일 복사
-echo "[4/9] 애플리케이션 파일 복사 중..."
+# 5. 애플리케이션 파일 복사
+echo "[5/10] 애플리케이션 파일 복사 중..."
 if [ ! -d "$SCRIPT_DIR/app" ]; then
     echo "오류: app 디렉토리를 찾을 수 없습니다."
     echo "스크립트는 프로젝트 루트 디렉토리에서 실행해야 합니다."
@@ -60,21 +88,21 @@ cp "$SCRIPT_DIR/requirements.txt" "$IPAM_DIR/"
 echo "  - 파일 권한 설정 중..."
 chown -R "$SERVICE_USER:$SERVICE_USER" "$IPAM_DIR"
 
-# 5. Python 가상환경 생성
-echo "[5/9] Python 가상환경 생성 중..."
+# 6. Python 가상환경 생성
+echo "[6/10] Python 가상환경 생성 중..."
 sudo -u "$SERVICE_USER" python3 -m venv "$IPAM_DIR/venv"
 sudo -u "$SERVICE_USER" "$IPAM_DIR/venv/bin/pip" install --upgrade pip
 
-# 6. Python 패키지 설치
-echo "[6/9] Python 패키지 설치 중..."
+# 7. Python 패키지 설치
+echo "[7/10] Python 패키지 설치 중..."
 sudo -u "$SERVICE_USER" "$IPAM_DIR/venv/bin/pip" install -r "$IPAM_DIR/requirements.txt"
 
-# 7. 데이터베이스 초기화
-echo "[7/9] 데이터베이스 초기화 중..."
+# 8. 데이터베이스 초기화
+echo "[8/10] 데이터베이스 초기화 중..."
 sudo -u "$SERVICE_USER" "$IPAM_DIR/venv/bin/python" "$IPAM_DIR/app/init_db.py"
 
-# 8. systemd 서비스 파일 생성
-echo "[8/9] systemd 서비스 파일 생성 중..."
+# 9. systemd 서비스 파일 생성
+echo "[9/10] systemd 서비스 파일 생성 중..."
 cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
 Description=IPAM Web Application
@@ -96,8 +124,8 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# 9. 서비스 시작 및 활성화
-echo "[9/9] 서비스 시작 및 활성화 중..."
+# 10. 서비스 시작 및 활성화
+echo "[10/10] 서비스 시작 및 활성화 중..."
 systemctl daemon-reload
 systemctl enable ${SERVICE_NAME}
 
