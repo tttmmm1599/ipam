@@ -81,16 +81,50 @@ sudo -u postgres psql -d ipam -c "GRANT ALL PRIVILEGES ON DATABASE ipam TO ipam;
 echo "  - PostgreSQL 인증 설정 중..."
 PG_HBA_CONF="/var/lib/pgsql/data/pg_hba.conf"
 if [ -f "$PG_HBA_CONF" ]; then
-    # 기존 설정 확인
+    # 기존 ident 인증 설정을 md5로 변경 (localhost IPv4)
+    if grep -q "host.*all.*all.*127.0.0.1/32.*ident" "$PG_HBA_CONF"; then
+        echo "  기존 ident 인증 설정을 md5로 변경 중..."
+        sudo -u postgres sed -i 's/^\(host.*all.*all.*127\.0\.0\.1\/32\).*ident/\1 md5/' "$PG_HBA_CONF"
+    fi
+    
+    # IPv4 설정 추가 (없는 경우)
     if ! grep -q "host.*ipam.*ipam.*127.0.0.1/32.*md5" "$PG_HBA_CONF"; then
         echo "host    ipam    ipam    127.0.0.1/32    md5" | sudo -u postgres tee -a "$PG_HBA_CONF" > /dev/null
-        sudo systemctl reload postgresql
-        echo "  PostgreSQL 인증 설정 완료"
+        echo "  IPv4 인증 설정 추가 완료"
+    fi
+    
+    # IPv6 설정 추가 (없는 경우)
+    if ! grep -q "host.*ipam.*ipam.*::1/128.*md5" "$PG_HBA_CONF"; then
+        echo "host    ipam    ipam    ::1/128    md5" | sudo -u postgres tee -a "$PG_HBA_CONF" > /dev/null
+        echo "  IPv6 인증 설정 추가 완료"
+    fi
+    
+    # localhost 전체 설정 (더 넓은 범위)
+    if ! grep -q "host.*ipam.*ipam.*localhost.*md5" "$PG_HBA_CONF"; then
+        echo "host    ipam    ipam    localhost    md5" | sudo -u postgres tee -a "$PG_HBA_CONF" > /dev/null
+        echo "  localhost 인증 설정 추가 완료"
+    fi
+    
+    # 설정 확인
+    echo "  pg_hba.conf 설정 확인:"
+    sudo -u postgres grep "ipam" "$PG_HBA_CONF" || echo "  (ipam 설정을 찾을 수 없습니다)"
+    
+    # PostgreSQL 재시작 (reload로는 부족할 수 있음)
+    echo "  PostgreSQL 서비스 재시작 중..."
+    sudo systemctl restart postgresql
+    sleep 2
+    
+    # 재시작 확인
+    if systemctl is-active --quiet postgresql; then
+        echo "  PostgreSQL 재시작 완료"
     else
-        echo "  PostgreSQL 인증 설정이 이미 존재합니다"
+        echo "  ⚠️  경고: PostgreSQL 재시작 실패"
+        systemctl status postgresql --no-pager -l
     fi
 else
-    echo "  ⚠️  경고: pg_hba.conf 파일을 찾을 수 없습니다"
+    echo "  ❌ 오류: pg_hba.conf 파일을 찾을 수 없습니다"
+    echo "  PostgreSQL 데이터 디렉토리 확인: ls -la /var/lib/pgsql/data/"
+    exit 1
 fi
 
 echo "  PostgreSQL 설정 완료 (사용자: ipam, 비밀번호: ipam, 데이터베이스: ipam)"
