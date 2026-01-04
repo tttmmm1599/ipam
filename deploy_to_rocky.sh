@@ -22,6 +22,31 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# 필요한 파일 및 디렉토리 확인
+echo "프로젝트 파일 확인 중..."
+echo "  스크립트 위치: $SCRIPT_DIR"
+
+if [ ! -d "$SCRIPT_DIR/app" ]; then
+    echo "❌ 오류: app 디렉토리를 찾을 수 없습니다."
+    echo "   스크립트는 프로젝트 루트 디렉토리에서 실행해야 합니다."
+    echo "   현재 위치: $SCRIPT_DIR"
+    exit 1
+fi
+
+if [ ! -f "$SCRIPT_DIR/requirements.txt" ]; then
+    echo "⚠️  경고: requirements.txt 파일을 찾을 수 없습니다."
+    echo "   현재 위치: $SCRIPT_DIR"
+    echo "   파일 목록:"
+    ls -la "$SCRIPT_DIR" | head -10
+    echo ""
+    echo "   requirements.txt가 없어도 계속 진행할 수 있지만,"
+    echo "   Python 패키지 설치 단계에서 실패할 수 있습니다."
+    echo ""
+fi
+
+echo "✅ 필수 파일 확인 완료"
+echo ""
+
 # 1. 필요한 패키지 설치
 echo "[1/10] 시스템 패키지 설치 중..."
 dnf update -y
@@ -52,11 +77,27 @@ sudo -u postgres psql -c "CREATE DATABASE ipam OWNER ipam;" 2>/dev/null || echo 
 # 권한 부여
 sudo -u postgres psql -d ipam -c "GRANT ALL PRIVILEGES ON DATABASE ipam TO ipam;" 2>/dev/null
 
+# PostgreSQL 인증 설정 (pg_hba.conf)
+echo "  - PostgreSQL 인증 설정 중..."
+PG_HBA_CONF="/var/lib/pgsql/data/pg_hba.conf"
+if [ -f "$PG_HBA_CONF" ]; then
+    # 기존 설정 확인
+    if ! grep -q "host.*ipam.*ipam.*127.0.0.1/32.*md5" "$PG_HBA_CONF"; then
+        echo "host    ipam    ipam    127.0.0.1/32    md5" | sudo -u postgres tee -a "$PG_HBA_CONF" > /dev/null
+        sudo systemctl reload postgresql
+        echo "  PostgreSQL 인증 설정 완료"
+    else
+        echo "  PostgreSQL 인증 설정이 이미 존재합니다"
+    fi
+else
+    echo "  ⚠️  경고: pg_hba.conf 파일을 찾을 수 없습니다"
+fi
+
 echo "  PostgreSQL 설정 완료 (사용자: ipam, 비밀번호: ipam, 데이터베이스: ipam)"
 echo "  ⚠️  보안을 위해 프로덕션 환경에서는 비밀번호를 변경하세요!"
 
 # 3. 서비스 사용자 생성
-echo "[2/9] 서비스 사용자 생성 중..."
+echo "[3/10] 서비스 사용자 생성 중..."
 if ! id "$SERVICE_USER" &>/dev/null; then
     useradd -r -s /bin/false -d "$IPAM_DIR" "$SERVICE_USER"
     echo "사용자 $SERVICE_USER 생성 완료"
@@ -70,6 +111,9 @@ mkdir -p "$IPAM_DIR"/{app/{api,web,templates,static,models},venv,logs}
 
 # 5. 애플리케이션 파일 복사
 echo "[5/10] 애플리케이션 파일 복사 중..."
+echo "  스크립트 실행 위치: $SCRIPT_DIR"
+
+# app 디렉토리 확인
 if [ ! -d "$SCRIPT_DIR/app" ]; then
     echo "오류: app 디렉토리를 찾을 수 없습니다."
     echo "스크립트는 프로젝트 루트 디렉토리에서 실행해야 합니다."
@@ -80,9 +124,30 @@ fi
 echo "  - app 디렉토리 복사 중..."
 cp -r "$SCRIPT_DIR/app"/. "$IPAM_DIR/app/"
 
-# requirements.txt 복사
+# requirements.txt 복사 (파일 존재 여부 확인)
 echo "  - requirements.txt 복사 중..."
-cp "$SCRIPT_DIR/requirements.txt" "$IPAM_DIR/"
+if [ -f "$SCRIPT_DIR/requirements.txt" ]; then
+    cp "$SCRIPT_DIR/requirements.txt" "$IPAM_DIR/"
+    echo "  requirements.txt 복사 완료"
+else
+    echo "  ⚠️  경고: requirements.txt 파일을 찾을 수 없습니다."
+    echo "  현재 디렉토리: $SCRIPT_DIR"
+    echo "  파일 목록:"
+    ls -la "$SCRIPT_DIR" | head -10
+    echo "  requirements.txt를 수동으로 생성하거나, Python 패키지를 수동으로 설치해야 합니다."
+    if [ -t 0 ] && [ -t 1 ]; then
+        # 대화형 모드
+        echo "  계속 진행하시겠습니까? (y/n)"
+        read -r response
+        if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            echo "배포를 중단합니다."
+            exit 1
+        fi
+    else
+        # 비대화형 모드 - 자동으로 계속 진행
+        echo "  비대화형 모드: 자동으로 계속 진행합니다."
+    fi
+fi
 
 # 파일 권한 설정
 echo "  - 파일 권한 설정 중..."
@@ -95,18 +160,64 @@ sudo -u "$SERVICE_USER" "$IPAM_DIR/venv/bin/pip" install --upgrade pip
 
 # 7. Python 패키지 설치
 echo "[7/10] Python 패키지 설치 중..."
-sudo -u "$SERVICE_USER" "$IPAM_DIR/venv/bin/pip" install -r "$IPAM_DIR/requirements.txt"
+if [ -f "$IPAM_DIR/requirements.txt" ]; then
+    sudo -u "$SERVICE_USER" "$IPAM_DIR/venv/bin/pip" install -r "$IPAM_DIR/requirements.txt"
+    echo "  Python 패키지 설치 완료"
+else
+    echo "  ⚠️  경고: requirements.txt 파일이 없어 기본 패키지를 설치합니다."
+    echo "  필수 패키지 설치 중..."
+    sudo -u "$SERVICE_USER" "$IPAM_DIR/venv/bin/pip" install \
+        fastapi==0.104.1 \
+        uvicorn[standard]==0.24.0 \
+        jinja2==3.1.2 \
+        python-multipart==0.0.6 \
+        sqlalchemy==2.0.23 \
+        pydantic==2.5.0 \
+        psycopg2-binary==2.9.9 \
+        ipaddress==1.0.23
+    echo "  기본 패키지 설치 완료"
+fi
 
 # 8. 데이터베이스 초기화
 echo "[8/10] 데이터베이스 초기화 중..."
-sudo -u "$SERVICE_USER" "$IPAM_DIR/venv/bin/python" "$IPAM_DIR/app/init_db.py"
+# PYTHONPATH를 설정하여 app 모듈을 찾을 수 있도록 함
+sudo -u "$SERVICE_USER" env PYTHONPATH="$IPAM_DIR" "$IPAM_DIR/venv/bin/python" -m app.init_db
 
 # 9. systemd 서비스 파일 생성
 echo "[9/10] systemd 서비스 파일 생성 중..."
+
+# 비대화형 모드 감지 함수
+is_interactive() {
+    [ -t 0 ] && [ -t 1 ]
+}
+
+# 포트 충돌 검사
+PORT=8000
+if command -v netstat &> /dev/null; then
+    if netstat -tuln 2>/dev/null | grep -q ":${PORT} "; then
+        echo "  ⚠️  경고: 포트 ${PORT}이 이미 사용 중입니다."
+        if is_interactive; then
+            echo "  다른 포트를 사용하시겠습니까? (y/n)"
+            read -r response
+            if [[ "$response" =~ ^[Yy]$ ]]; then
+                read -p "  포트 번호를 입력하세요 [8000]: " input_port
+                PORT=${input_port:-8000}
+            else
+                echo "  기존 서비스를 중지하고 계속 진행합니다..."
+                systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+            fi
+        else
+            echo "  비대화형 모드: 기존 서비스를 중지하고 계속 진행합니다..."
+            systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+        fi
+    fi
+fi
+
 cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
 Description=IPAM Web Application
-After=network.target
+After=network.target postgresql.service
+Requires=postgresql.service
 
 [Service]
 Type=simple
@@ -114,7 +225,8 @@ User=$SERVICE_USER
 Group=$SERVICE_USER
 WorkingDirectory=$IPAM_DIR
 Environment="PATH=$IPAM_DIR/venv/bin"
-ExecStart=$IPAM_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Environment="PYTHONPATH=$IPAM_DIR"
+ExecStart=$IPAM_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -141,12 +253,19 @@ fi
 # 방화벽 설정 (선택사항)
 if command -v firewall-cmd &> /dev/null; then
     echo ""
-    echo "방화벽 포트 8000을 열까요? (y/n)"
-    read -r response
+    if [ -t 0 ] && [ -t 1 ]; then
+        # 대화형 모드
+        echo "방화벽 포트 ${PORT}을 열까요? (y/n)"
+        read -r response
+    else
+        # 비대화형 모드 - 기본값 사용
+        response="n"
+        echo "비대화형 모드: 방화벽 설정을 건너뜁니다."
+    fi
     if [[ "$response" =~ ^[Yy]$ ]]; then
-        firewall-cmd --permanent --add-port=8000/tcp
+        firewall-cmd --permanent --add-port=${PORT}/tcp
         firewall-cmd --reload
-        echo "방화벽 포트 8000이 열렸습니다."
+        echo "방화벽 포트 ${PORT}이 열렸습니다."
     fi
 fi
 

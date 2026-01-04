@@ -49,8 +49,15 @@ app.include_router(routes.router, tags=["web"])
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     """메인 페이지"""
-    content = render_template("index.html", request=request)
-    return HTMLResponse(content=content)
+    try:
+        content = render_template("index.html", request=request)
+        return HTMLResponse(content=content)
+    except Exception as e:
+        # 템플릿 파일이 없거나 오류 발생 시 기본 응답
+        return HTMLResponse(
+            content=f"<h1>IPAM 서비스</h1><p>템플릿을 로드할 수 없습니다: {str(e)}</p><p>템플릿 경로: {TEMPLATES_DIR}</p>",
+            status_code=500
+        )
 
 @app.get("/health")
 async def health_check():
